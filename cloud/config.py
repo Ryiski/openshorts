@@ -138,6 +138,19 @@ class Settings:
         # Where operational alerts (proxy out of credits, high failure rate) go.
         return os.environ.get("ADMIN_EMAIL", "")
 
+    # Telegram (optional) — real-time admin alerts (purchases, churn, outages)
+    @property
+    def telegram_bot_token(self) -> str:
+        return os.environ.get("TELEGRAM_BOT_TOKEN", "")
+
+    @property
+    def telegram_chat_id(self) -> str:
+        return os.environ.get("TELEGRAM_CHAT_ID", "")
+
+    @property
+    def telegram_configured(self) -> bool:
+        return bool(self.telegram_bot_token and self.telegram_chat_id)
+
     # Google OAuth
     @property
     def google_client_id(self) -> str:

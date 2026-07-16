@@ -33,11 +33,34 @@ def _cooldown_ok(kind: str) -> bool:
     return True
 
 
+async def send_telegram(text: str):
+    """Push a plain-text message to the admin's Telegram chat. No-op if unset.
+
+    Best-effort: never raises — an alert failing must not break a webhook or job.
+    """
+    if not settings.telegram_configured:
+        return
+    try:
+        import httpx
+        url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
+        payload = {"chat_id": settings.telegram_chat_id, "text": text,
+                   "disable_web_page_preview": True}
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(url, json=payload)
+    except Exception as e:
+        print(f"⚠️  Telegram alert failed: {e}")
+
+
 async def send_admin_alert(subject: str, body: str):
+    """Notify the admin via every configured channel (email + Telegram)."""
+    # Telegram first — instant, and configured independently of email.
+    await send_telegram(f"{subject}\n\n{body}")
+
     to = settings.admin_email
     if not to or not settings.smtp_configured:
-        print(f"⚠️  [ADMIN ALERT] {subject}\n{body[:500]}"
-              + ("" if to else "  (set ADMIN_EMAIL + SMTP_* to email these)"))
+        if not settings.telegram_configured:
+            print(f"⚠️  [ADMIN ALERT] {subject}\n{body[:500]}"
+                  + ("" if to else "  (set ADMIN_EMAIL + SMTP_* or TELEGRAM_* to receive these)"))
         return
     html = f"<pre style='font:13px/1.5 monospace;white-space:pre-wrap'>{body}</pre>"
     await send_email(to, f"[OpenShorts] {subject}", html)

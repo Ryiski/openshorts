@@ -243,6 +243,7 @@ async def _apply_topup(session_obj: dict):
     minutes = int((session_obj.get("metadata") or {}).get("minutes") or 0)
     if minutes <= 0:
         return
+    buyer_email = None
     async with database.session() as s:
         async with s.begin():
             existing = (await s.execute(
@@ -259,6 +260,15 @@ async def _apply_topup(session_obj: dict):
                 user_id=user_id, stripe_session_id=session_id,
                 minutes_total=minutes, minutes_consumed=0,
             ))
+            buyer_email = (await s.execute(
+                select(User.email).where(User.id == user_id)
+            )).scalar_one_or_none()
+
+    from .alerts import send_admin_alert
+    await send_admin_alert(
+        "💰 Top-up purchased",
+        f"{buyer_email or 'A user'} bought +{minutes} minutes.",
+    )
 
 
 def _sub_item(sub_obj: dict):
@@ -315,6 +325,12 @@ async def _upsert_subscription(sub_obj: dict, event_created: datetime):
             # Detect the moment the user hits "cancel" (False -> True).
             was_canceling = bool(row.cancel_at_period_end) if row else False
             just_canceled = now_canceling and not was_canceling
+            # Purchase signals: brand-new subscription, and trial -> paid conversion.
+            is_new_sub = row is None
+            prev_status = row.status if row else None
+            buyer_email = (await s.execute(
+                select(User.email).where(User.id == user_id)
+            )).scalar_one_or_none()
             end_dt = _ts(end)
             values = dict(
                 stripe_subscription_id=sub_obj["id"],
@@ -331,6 +347,22 @@ async def _upsert_subscription(sub_obj: dict, event_created: datetime):
             else:
                 for k, v in values.items():
                     setattr(row, k, v)
+
+    # Purchase alert: someone just subscribed (trial started or paid outright).
+    now_status = sub_obj["status"]
+    if is_new_sub:
+        from .alerts import send_admin_alert
+        label = "trial started — card on file" if now_status == "trialing" else now_status
+        await send_admin_alert(
+            "🎉 New subscriber",
+            f"{buyer_email or 'A user'} started the {plan} ({interval}) plan.\nStatus: {label}.",
+        )
+    elif prev_status == "trialing" and now_status == "active":
+        from .alerts import send_admin_alert
+        await send_admin_alert(
+            "💳 Trial converted to paid",
+            f"{buyer_email or 'A user'} is now a paying {plan} ({interval}) subscriber. 🎉",
+        )
 
     # Churn alert to the admin the moment a subscription is set to cancel.
     if just_canceled:
